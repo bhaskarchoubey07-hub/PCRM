@@ -17,6 +17,17 @@ DATASET_CANDIDATES = [
     Path("External_Cibil_Dataset.xlsx"),
 ]
 ARTIFACTS_DIR = Path("artifacts")
+FEATURE_ALIASES = {
+    "income_inr": "income",
+    "loan_amount_inr": "loan_amount",
+    "existing_debt_inr": "debt_to_income_ratio",
+    "credit_history_years": "credit_history_length",
+    "credit_history_length": "credit_history_length",
+    "interest_rate_pct": "interest_rate",
+    "num_loans": "number_of_loans",
+    "loan_count": "number_of_loans",
+    "late_payment_count": "late_payments",
+}
 
 
 def find_dataset_path() -> Path:
@@ -75,10 +86,14 @@ def build_prediction_frame(
     for column in feature_columns:
         if column in user_inputs:
             row[column] = user_inputs[column]
-        elif column in numeric_inputs:
-            row[column] = 0
         else:
-            row[column] = "Unknown"
+            mapped_input = _resolve_feature_value(column, user_inputs)
+            if mapped_input is not None:
+                row[column] = mapped_input
+            elif column in numeric_inputs or _looks_numeric(column):
+                row[column] = _default_numeric_value(column)
+            else:
+                row[column] = "Unknown"
     return pd.DataFrame([row])
 
 
@@ -148,3 +163,73 @@ def prediction_report_downloads(
 
 def _slugify(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+
+def _resolve_feature_value(column: str, user_inputs: dict):
+    normalized_column = column.strip().lower()
+
+    if normalized_column in FEATURE_ALIASES and FEATURE_ALIASES[normalized_column] in user_inputs:
+        base_value = user_inputs[FEATURE_ALIASES[normalized_column]]
+        if normalized_column == "existing_debt_inr":
+            income = float(user_inputs.get("income", 0) or 0)
+            ratio = float(user_inputs.get("debt_to_income_ratio", 0) or 0)
+            return income * ratio
+        return base_value
+
+    tokens = set(normalized_column.replace("-", "_").split("_"))
+    token_aliases = {
+        "income": "income",
+        "amount": "loan_amount",
+        "loan": "loan_amount",
+        "rate": "interest_rate",
+        "interest": "interest_rate",
+        "age": "age",
+        "score": None,
+        "debt": "debt_to_income_ratio",
+        "ratio": "debt_to_income_ratio",
+        "history": "credit_history_length",
+        "length": "credit_history_length",
+        "loans": "number_of_loans",
+        "payments": "late_payments",
+        "employment": "employment_length",
+    }
+
+    for token, input_name in token_aliases.items():
+        if token in tokens and input_name in user_inputs:
+            return user_inputs[input_name]
+
+    return None
+
+
+def _looks_numeric(column: str) -> bool:
+    numeric_tokens = {
+        "age",
+        "income",
+        "amount",
+        "score",
+        "debt",
+        "ratio",
+        "length",
+        "history",
+        "loans",
+        "payments",
+        "id",
+        "rate",
+        "count",
+        "number",
+        "inr",
+        "pct",
+    }
+    tokens = set(column.strip().lower().replace("-", "_").split("_"))
+    return bool(tokens & numeric_tokens)
+
+
+def _default_numeric_value(column: str):
+    normalized_column = column.strip().lower()
+    if "score" in normalized_column:
+        return 700.0
+    if "age" in normalized_column:
+        return 35.0
+    if "rate" in normalized_column or "ratio" in normalized_column:
+        return 0.0
+    return 0.0
